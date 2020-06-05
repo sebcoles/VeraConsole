@@ -6,11 +6,13 @@ using System.IO;
 using VeracodeService;
 using VeracodeService.Repositories;
 using VeracodeWebhooks.Configuration;
-using Console.Commands;
 using System.Linq;
 using VeraConsole.Options;
+using VeraConsole.Helpers;
+using VeracodeService.Models;
+using VeraConsole.Commands;
 
-namespace WebhookRunner
+namespace VeraConsole
 {
     class Program
     {
@@ -30,14 +32,25 @@ namespace WebhookRunner
             serviceCollection.Configure<VeracodeConfiguration>(options => Configuration.GetSection("Veracode").Bind(options));
             serviceCollection.AddScoped<IVeracodeWrapper, VeracodeWrapper>();
             serviceCollection.AddScoped<IVeracodeRepository, VeracodeRepository>();
+            serviceCollection.AddScoped<IReporting, Reporting>();
             _serviceProvider = serviceCollection.BuildServiceProvider();
 
-            Parser.Default.ParseArguments<GetAppsOptions, GetBuildOptions, GetFlawOptions, GetLatestFlawsOptions>(args)
+            var reportingCommands = _serviceProvider.GetService<IReporting>();
+
+            Parser.Default.ParseArguments<
+                GetAppsOptions, 
+                GetBuildOptions, 
+                GetTriageFlawsOptions, 
+                PolicySummaryOptions,
+                SourceFileSummaryOptions,
+                DuplicateFlawOptions>(args)
                 .MapResult(
                   (GetAppsOptions opts) => GetApps(opts),
                   (GetBuildOptions opts) => GetBuilds(opts),
-                  (GetFlawOptions opts) => GetFlaws(opts),
-                  (GetLatestFlawsOptions opts) => GetLatestFlaws(opts),
+                  (GetTriageFlawsOptions opts) => reportingCommands.TriageFlaws(opts),
+                  (PolicySummaryOptions opts) => reportingCommands.PolicySummary(opts),
+                  (SourceFileSummaryOptions opts) => reportingCommands.SourceFileSummary(opts),
+                  (DuplicateFlawOptions opts) => reportingCommands.DuplicateFlaws(opts),
                   errs => HandleParseError(errs));
         }
 
@@ -49,11 +62,7 @@ namespace WebhookRunner
             if(options.NamePattern != "")
                 apps = apps.Where(x => x.App_name.Contains(options.NamePattern)).ToArray();
 
-            var output = "App_id, App_name\n";
-            foreach(var app in apps)
-            {
-                output += $"{app.App_id},{app.App_name}\n";
-            }
+            var output = new CsvHelper().ToCsv(apps);
 
             if (options.Output.ToLower().Equals("csv"))
             {
@@ -69,11 +78,7 @@ namespace WebhookRunner
         {
             var repo = _serviceProvider.GetService<IVeracodeRepository>();
             var builds = repo.GetAllBuildsForApp(""+options.AppId);
-            var output = "Build_id, Launch_date, Results_ready, Submitter\n";
-            foreach (var build in builds)
-            {
-                output += $"{build.Build_id},{build.Launch_date},{build.Results_ready},{build.Submitter}\n";
-            }
+            var output = new CsvHelper().ToCsv(builds);
 
             if (options.Output.ToLower().Equals("csv"))
             {
@@ -85,84 +90,7 @@ namespace WebhookRunner
             }
             return 1;
         }
-
-        static int GetFlaws(GetFlawOptions options)
-        {
-            var repo = _serviceProvider.GetService<IVeracodeRepository>();
-            var flaws = repo.GetFlaws(""+options.BuildId);
-
-            if (options.FixForPolicy)
-                flaws = flaws.Where(x => bool.Parse(x.Affects_policy_compliance.ToLower())).ToArray();
-
-            var output = "Issueid, Sourcefile, Line, " +
-                "Severity, Affects_policy_compliance, Categoryid, Categoryname, " +
-                "Cia_impact, Count, Cweid, Date_first_occurrence, " +
-                "ExploitLevel, Functionprototype, Functionrelativelocation, " +
-                "Grace_period_expires, Mitigation_status, Mitigation_status_desc, Module, " +
-                "Note, Pcirelated, Remediationeffort, Scope, " +
-                "Type\n";
-            foreach (var flaw in flaws)
-            {
-                output += $"{flaw.Issueid},{flaw.Sourcefile},{flaw.Line}," +
-                    $"{flaw.Severity},{flaw.Affects_policy_compliance},{flaw.Categoryid},{flaw.Categoryname}," +
-                    $"{flaw.Cia_impact},{flaw.Count},{flaw.Cweid},{flaw.Date_first_occurrence}," +
-                    $"{flaw.ExploitLevel},\"{flaw.Functionprototype}\"," +
-                    $"{flaw.Functionrelativelocation},{flaw.Grace_period_expires}," +
-                    $"{flaw.Mitigation_status},{flaw.Mitigation_status_desc}, {flaw.Module}, " +
-                    $"{flaw.Note}, {flaw.Pcirelated}, {flaw.Remediationeffort}," +
-                    $"{flaw.Scope}, {flaw.Type}"+
-                    $"\n";
-            }
-
-            if (options.Output.ToLower().Equals("csv"))
-            {
-                File.WriteAllText($"{options.Filename}.csv", output);
-            }
-            else
-            {
-                System.Console.WriteLine(output);
-            }
-            return 1;
-        }
-
-        static int GetLatestFlaws(GetLatestFlawsOptions options)
-        {
-            var repo = _serviceProvider.GetService<IVeracodeRepository>();
-            var apps = repo.GetAllApps().Where(x => x.App_name.Contains(options.NamePattern));
-
-            if (options.NamePattern != "")
-                apps = apps.Where(x => x.App_name.Contains(options.NamePattern)).ToArray();
-
-            foreach (var app in apps)
-            {
-                var buildid = repo.GetAllBuildsForApp("" + app.App_id).OrderBy(x => x.Build_id).First().Build_id;
-                var flaws = repo.GetFlaws(buildid);
-
-                var output = "Issueid, Sourcefile, Line, " +
-                               "Severity, Affects_policy_compliance, Categoryid, Categoryname, " +
-                               "Cia_impact, Count, Cweid, Date_first_occurrence, " +
-                               "Description, ExploitLevel, Functionprototype, Functionrelativelocation, " +
-                               "Grace_period_expires, Mitigation_status, Mitigation_status_desc, Module, " +
-                               "Note, Pcirelated, Remediationeffort, Scope, " +
-                               "Type\n";
-                foreach (var flaw in flaws)
-                {
-                    output += $"{flaw.Issueid},{flaw.Sourcefile},{flaw.Line}," +
-                        $"{flaw.Severity},{flaw.Affects_policy_compliance},{flaw.Categoryid},{flaw.Categoryname}," +
-                        $"{flaw.Cia_impact},{flaw.Count},{flaw.Cweid},{flaw.Date_first_occurrence}," +
-                        $"\"{flaw.Description}\",{flaw.ExploitLevel},\"{flaw.Functionprototype}\"," +
-                        $"{flaw.Functionrelativelocation},{flaw.Grace_period_expires}," +
-                        $"{flaw.Mitigation_status},{flaw.Mitigation_status_desc}, {flaw.Module}, " +
-                        $"{flaw.Note}, {flaw.Pcirelated}, {flaw.Remediationeffort}," +
-                        $"{flaw.Scope}, {flaw.Type}" +
-                        $"\n";
-
-                    File.WriteAllText($"{options.Filename}.csv", output);
-                }
-            }
-            return 1;
-        }
-
+               
         static int HandleParseError(IEnumerable<Error> errs)
         {
             return 1;

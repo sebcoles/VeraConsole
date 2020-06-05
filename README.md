@@ -15,5 +15,5 @@ Get all flaws for a build
 `--fixforpolicy`		// If true, results will only contain flaws that break policy (default is false)
 
 ## Get Triage Flaws view for a build for policy breaking flaws and write to csv
-`.\VeraConsole.exe getflaws --buildid XXXXXXXX -o csv -f "name_of_csv" --fixforpolicy true
+`.\VeraConsole.exe getflaws --buildid XXXXXXXX -o csv -f "name_of_csv" --fixforpolicy true1
 
